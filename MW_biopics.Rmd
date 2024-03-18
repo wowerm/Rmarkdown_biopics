@@ -1,0 +1,456 @@
+---
+title: "Filmy biograficzne na przestrzeni czasu i rozwoju kinematografii"
+author: Michał Wower
+date: 04.06.2023
+output: 
+  html_document:
+    toc: true
+    toc_depth: 2
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE)
+
+# podstawowe pakiety wykorzystywane w analizie
+# laduje tutaj, zeby byly w jednym miejscu
+library(tidyverse)
+library(lubridate)
+library(ggrepel)
+library(fivethirtyeight)
+library(knitr)
+```
+
+
+# Wprowadzenie
+
+Obranym za cel projektu jest analiza danych nt. filmów biograficznych wyprodukowanych na przestrzeni 100 lat. Zwrócono szczególną uwagę na cechy głównych postaci.
+
+> [Film biograficzny – gatunek kina fabularnego, opowieść filmowa, której tematem jest życie i działalność sławnych ludzi](https://pl.wikipedia.org/wiki/Film_biograficzny)
+
+Dane wykorzystane w owym projekcie zostały zgromadzone przez serwis [*IMDb*](https://www.imdb.com/) i podane obróbce przez strone [**fivethirtyeight**](https://fivethirtyeight.com/).
+
+## Obróbka danych
+
+Dane wczytano bezpośrednio z pakietu *fivethirtyeight*.
+
+*Uwaga:Zmieniono kolejność kolumn.*
+
+```{r}
+db <- biopics[,c(1,3,4,5,6,7,8,9,13,14,11,12,10,2)]
+```
+
+Składają się z `r nrow(db)` rekordów i `r ncol(db)` zmiennych. Każdy rekord zawiera dane na temat osobnego bohatera.
+
+
+## Wykorzystane zmienne
+
+Analizie poddano następujące zmienne:  
+
+| Zmienna              | Opis          
+| ---------------------|:-------------------------------------------
+| *title*              | tytuł
+| *country*            | kraj/e produckji
+| *year_release*       | rok produkcji
+| *box_office*         | przychód w Stanach Zjednoczonych
+| *director*           | reżyser
+| *number_of_subjects* | liczba bohaterów w filmie
+| *subject*            | osoba o której jest dany film
+| *type_of subject*    | zawód/zajęcie
+| *subject_sex*        | płeć
+| *type_of_subject*    | zawód/zajęcie
+| *lead_actor_actress* | aktor/ka grający/a główną rolę
+| *subject_race*       | rasa
+| *person_of_color*    | wskazuję czy osoba jest rasy białej czy innej
+| *race_known*         | wskazuję czy znana jest rasa
+| *site*               | adres URL do strony IMtitles 
+
+
+```{r warning=FALSE}
+#zamianna niektórych zmiennych na faktory
+db$country <- factor(db$country)
+db$subject_race <- factor(db$subject_race)
+db$type_of_subject <- factor(db$type_of_subject)
+db$race_known <- factor(db$race_known)
+db$subject_sex <- factor(db$subject_sex)
+```
+
+**Dodatkowo utworzono ramkę danych `titles`, aby wszelkie obliczenia były poprawne**
+
+**Dobór ramki danych do obliczeń i wykresów został zdeterminowany przez pożądne w danym miejscu informacje**
+
+```{r}
+#utworzenie nowej ramki w której tytuły się nie powtarzają
+titles <- db[!duplicated(db$title),]
+```
+
+Podsumowanie wybranych statystyk:
+
+```{r warninig=FALSE}
+knitr::kable(titles %>% select(year_release, box_office, subject_race, type_of_subject) %>% summary)
+```
+
+Tabela pokazuję, że rekordy zawierają dane o filmach z lat z przedziału [1915:2014]. Ponadto można zauważyć zatrwarzającą rozbieżność boxoffice'ów oraz zdecydowaną przewagę rasy białej pod względem pełnienia roli bohatera. Również warto odnotować, że najwięcej filmów biograficznych powstało na podstawie życiorysów kryminalistów oraz sportowców, jednak tematyka jest dosyć zróźnicowana gdyż stanowią one (sportowcy jak i kryminaliści) `r titles  %>% filter(type_of_subject=="Criminal") %>% summarise(n=n())/nrow(titles)*100`% wszystkich filmów. 
+Trzeba również nadmienienić, że w wielu rekordach występują braki. W kolumnie `box_office` jest 288 wartości NA, a w kolumnie `subject_race` jest 169 takowych rekordów.
+
+
+# Analiza
+
+Zagadnienia poddane analizie:
+
+* popularność filmów biograficznych
+  + liczba produkcji
+  + boxoffice'y
+  + kraje przodujące w liczbie zrealizowanych filmów
+* postać, na kanwie której stworzono film a jej cechy
+  + profesja/powód stania się sławnym
+  + zróżnicowanie rasowe
+  + stosunek kobiet w stosunku do mężczyzn
+* osoby zaangażowane w największą ilość filmów
+* najbardziej kasowe filmy i osobe za nie odpowiedzialne
+
+
+## Analiza trendu na przestrzeniu lat
+
+Sprawdzono liczbę filmów biograficznych produkowanych w każdym roku oraz osiągniętym przychodzie z ich tytułu.
+
+### Liczba filmów
+
+```{r}
+titles %>% 
+  group_by(year_release) %>% 
+  summarise(n=n()) %>% 
+  ggplot(aes(x=year_release,y=n))+
+  geom_col(fill="lightgreen",col="darkgreen",width = 0.4)+
+  theme_bw()+
+  ggtitle("Liczba filmów powastałych w poszczególnych latach")+
+  xlab("rok")+
+  ylab("liczba filmów")+
+  scale_x_continuous(breaks = seq(1915,2014,3))+
+  geom_smooth(col="red",se=F)+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5))
+```
+
+
+### Łączny przychód w całej branży z tytułu filmów biograficznych z podziałem na lata
+
+*Uwaga: niestety aż *`r sum(is.na(titles$box_office))` *rekordów ma braki w columnie `box_office`, jednak mimo tego jesteśmy w stanie wyciągnąć merytoryczne wnioski*
+
+```{r}
+### liczba zdarzen ####
+titles %>% 
+  filter(box_office>0) %>% 
+  group_by(year_release) %>% 
+  summarise(sum_boxoffice=sum(box_office/1E6)) %>% 
+  ggplot(aes(x=year_release,y=sum_boxoffice))+
+  geom_col(fill="lightblue",col="navy",width = 0.4)+
+  theme_bw()+
+  ggtitle("Łączny przychód na przestrzeni lat (w mln)")+
+  xlab("rok")+
+  ylab("przychów (w mln)")+
+  scale_x_continuous(breaks = seq(1915,2014,3))+
+  geom_smooth(col="red",se=F)+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5))
+```
+
+Wnioski wyciągniete z wykresów:
+
+* liczba nakręconych filmów niemal cały czas rośnie
+* przychód rośnie adekwatnie z ilością produkcji
+* lata 90' to czas w którym zaobserwowano największy wzorst zarówno zrealizowanych filmów jak również przychodów
+
+### Wiodące kraje pod względem liczby wypuszczonych filmów
+
+```{r}
+titles %>% 
+  group_by(country) %>% 
+  summarise(n=n()) %>% 
+  ggplot(aes(x=country,y=n,fill=country))+
+  geom_col(col="black",width=0.8,just = 0.5)+
+  theme_minimal()+
+  ylim(c(0,500))+
+  ylab("liczba filmów")+
+  xlab("kraj/kraje")+
+  scale_fill_discrete(name = "kraj/kraje")+
+  ggtitle("Liczba wyprodukowanych filmów z podziałem na kraj produkcji")
+```
+
+Niezaprzeczalnie głownym producentem takowych filmów są Stany Zjednoczone.
+
+## Analiza cech bohatera
+
+Przyjrzano się jakie cechy najczęściej chrakteryzuja postąć, o której nakręcono film. Mowa tu o płci, kolorze skóry, oraz powodzie, który sprawił, że dana osoba postrzegana jest jako sławna persona.
+
+### Liczba głównych bohaterów
+
+#### Częstość występowania w filmie więcej niż jednej głównej postaci
+```{r}
+knitr::kable(
+  titles %>% 
+  group_by(number_of_subjects) %>% 
+  summarise(n=n()),
+col.names=(c("główne postaci","liczba filmów"))
+)
+```
+
+Większość filmu opowiada o jednej osobie, zdarza się, że o dwóch, lecz o 3 albo 4 jedynie w pojedyńczych przypadkach
+
+#### Filmy z większką liczbą głównych postaci niż 2
+
+```{r}
+knitr::kable(
+  titles[,c(1,5,6)] %>% 
+    filter(number_of_subjects>2) %>% 
+    arrange(number_of_subjects)
+)
+```
+
+Najwięcej (`4`) głównych bohaterów było w filmie The Bang Bang Club oraz Jersey Boys
+
+### Profesja/zajęcie bohatera
+
+*Uwaga: Tabela pomija wartość `Other`, lecz rekordy ją zawierające są brane do obliczeń procentowych.*
+
+```{r}
+knitr::kable(
+db %>%
+  filter(type_of_subject!="Other") %>% 
+  group_by(type_of_subject) %>% 
+  summarise(n=n(),
+            udział_procentowy=n/nrow(titles)*100) %>% 
+  arrange(desc(n)),
+col.names=c("zawód/zajęcie","liczba","udział w %")
+)
+```
+Wyniki są zróżnicowane, jednak 4 wartości ("Criminal","Historical","Musician","Athlete") zdają się delikatnie odstawać od reszty.
+Oznacza to, że główny bohater najczęściej był kryminalistą, postacią historyczną, muzykiem albo sportowcem.
+
+
+#### Pod uwagę wzięto 4 najczęściej występujące wartości i porównano ich udział z biegem lat
+
+```{r}
+db %>%
+  filter(type_of_subject%in%c("Criminal","Historical","Musician","Athlete")) %>%
+  mutate(breaks=cut(year_release,c(1915,1940,1965,1990,2015),labels = c("1915-1940","1941-1965","1966-1990","1991-2014"))) %>% 
+  group_by(breaks,type_of_subject) %>% 
+  summarise(n=n()) %>% 
+  ggplot(aes(x=breaks,y=n,fill=type_of_subject))+
+  geom_col(position = "fill",col="black",width=0.7)+
+  theme_bw()+
+  theme(legend.position = "bottom")+
+  ggtitle("Udział 4 głównych profesji w kinie biograficznym na osi czasu")+
+  xlab("")+
+  ylab("udział")+
+  scale_fill_discrete(name = "zawód/profesja",labels=c("sportowiec","przestępca","postać historyczna","muzyk"))
+  
+  
+```
+
+Zauważono stały spadek udziału filmów o postaciach historycznych z biegiem czasu. W czasach powstawania kinematografii to one stanowiły trzon tematyczny filmów biograficznych. Ich miejsce zostało zastąpione przez produkcje o sportowcach oraz przestępcach. Warty odnotowania jest również fakt, że szczyt popularności filmów o kryminalistach miał miejsce w drugiej połowie XX w.
+
+#### Przychody w owych 4 kategoriach
+
+```{r}
+titles %>% 
+  filter(!is.na(box_office)&type_of_subject%in%c("Criminal","Historical","Musician","Athlete")) %>% 
+  ggplot(aes(x=type_of_subject,y=box_office/1E6,fill=type_of_subject))+
+  geom_boxplot(col="black")+
+  xlab("zawód/zajęcie")+
+  ylab("przyychód w mln")+
+  ggtitle("Przychody filmów w rozważanych kategoriach")+
+  theme_bw()+
+  scale_fill_discrete(name = "zawód/zajęcie",labels=c("sportowiec","przestępca","postać historyczna","muzyk"))
+  
+```
+
+
+Przychody z filmów biograficznych o muzykach zauważalnie są niższe niż pozostałych 3 kategorii. Natomiast średnio najbardziej opłacalne są filmy o sportowcach.
+
+### Kolor skóry głównego bohatera
+
+*Uwaga: We wszelakich obliczeniach pominięto *`r count(titles[!complete.cases(titles$subject_race),])` *rekordów zawierających wartość `NA`. Oznacza to operowanie na* `r count(titles[complete.cases(titles$subject_race),])/nrow(titles)*100` *% rekordów*
+
+#### Liczba zrezalizowanych produkcji z podziałem na rasę głównej postaci
+
+
+```{r}
+db %>%
+  filter(complete.cases(db$subject_race)) %>% 
+  group_by(subject_race) %>% 
+  summarise(n=n()) %>% 
+  arrange(desc(n)) %>% 
+  ggplot(aes(x=n,y=reorder(subject_race,n)))+
+  geom_col()+
+  xlab("liczba")+
+  ylab("rasa")+
+  ggtitle("Ilość produkcji o postaci danego koloru skóry")+
+  theme_bw()
+```
+
+ Zdecydowany prym wiodą osoby białoskóre. Dokładniej `r db %>% filter(complete.cases(db$subject_race)&subject_race=="White") %>% summarise(n=n()) / nrow(db[complete.cases(db$subject_race),])*100` % filmów jest o przedstawicielu tej rasy.
+ 
+#### Udział rasowy w czterech wcześniej analizowanych profesjach, tj. Kryminalista, Postać Historyczna, Sportowiec, Muzyk 
+ 
+```{r}
+knitr::kable(
+db %>% 
+  filter(type_of_subject%in%c("Criminal","Historical","Musician","Athlete")&complete.cases(db$subject_race)) %>% 
+  group_by(type_of_subject,subject_race) %>% 
+  summarise(n=n()) %>% 
+  pivot_wider(names_from = type_of_subject,values_from = n,values_fill = F),
+col.names = c("rasa bohatera","sportowiec","przestępca","postać historyczna","muzyk")
+)
+```
+
+Rasa biała ma niezaprzeczalną przegawę w każdej kategorii. Nie licząc pojedyńczych przypadków jedyne trendy tyczące się ras innych niż biała to afroamerykanie w filmach o sportowcach oraz przedstawiciele bliskiego wschodu w produkcjach o postaciach historycznych.
+
+### Płeć postaci pierwszoplanowej
+
+#### Udział procentowy kobiet i mężczyzn jako główny bohater/ka
+
+```{r}
+knitr::kable(
+prop.table(table(db$subject_sex))*100,
+col.names = c("płeć","udział w %")
+)
+```
+
+Mężczyzni stanowią ponad 3/4 głownych postaci.
+
+#### Płeć na osi czasu
+
+```{r}
+db %>% 
+  group_by(subject_sex,year_release) %>% 
+  summarise(n=n()) %>% 
+  ggplot(aes(x=year_release,y=n,col=subject_sex))+
+  geom_line(linewidth =2)+
+  facet_grid(subject_sex~.)+
+  theme_bw()+
+  ggtitle("Liczba filmów w poszczególnych latach dla obu płci")+
+  ylab("liczba")+
+  xlab("oś czasu")+
+  theme(legend.position = "top")+
+  scale_color_manual(values=c("pink","navy"))
+```
+
+Chociaż od samemego początku kinematografii statystyka ta była na korzyść mężczyzn to z czasem przepaść się pogłębiała. Od około 2000 roku owa dysproporcja jedynie przybrała na szybkości powiększania się.
+
+## Nazwiska związane z branżą
+
+### Reżyserzy mający na swoim koncie najwięcej filmów biograficznych
+
+```{r}
+knitr::kable(
+titles %>% 
+  group_by(director) %>% 
+  summarise(n=n()) %>% 
+  arrange(desc(n)) %>% 
+  head(10) 
+)  
+```
+
+Michael Curtiz ma najwięcej filmów biograficznych na swoim koncie.
+
+#### Dwóch reżyserów z największą liczbą filmów biograficznych a charakterystyka owych filmów
+
+```{r}
+            
+titles %>% 
+  filter(director%in%c("Michael Curtiz","Richard Attenborough")) %>% 
+  ggplot(aes(x=type_of_subject,y=title,fill=director))+
+  geom_point(pch=21,size=5,col="black")+
+  theme_minimal()+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5))+
+  xlab("")+
+  ylab("")
+  
+```
+
+Zauważono, że aż połowa filmów Michael'a Curtiz'a jest o muzykach. Natomiast dobór tematyki Richard'a Attenborought jest bardziej zróżnicowany.
+
+### Aktorzy zasłużeni dla kinematografii biograficznej
+
+```{r}
+knitr::kable(
+db %>% 
+  filter(complete.cases(db$lead_actor_actress)) %>% 
+  group_by(lead_actor_actress) %>% 
+  summarise(n=n()) %>% 
+  arrange(desc(n)) %>% 
+  head(10),
+col.names = c("Aktor","liczba filmów")
+)  
+```
+
+Liczby podobne do tych uzyskanych dla reżyserów. Rekord dzierży Leonardo DiCaprio z siedmioma głównymi odegranymi rolami na koncie. Jednak to reżyser Michael Curtiz pozostaje osobą, która miała wkład w produkcje największej ilości filmów biograficznych.
+
+#### Filmy z udziałem Leonardo DiCaprio
+
+```{r}
+db %>% 
+  filter(lead_actor_actress=="Leonardo DiCaprio") %>% 
+  mutate(boxoffice_w_mln=box_office/1E6) %>% 
+  ggplot(aes(x=year_release,y=title,fill=type_of_subject,shape=type_of_subject))+
+  geom_point(aes(,size=boxoffice_w_mln),pch=21,col="black")+
+  theme_bw()+
+  ggtitle("Leonardo DiCaprio w filmach biograficzncyh")+
+  geom_label_repel(aes(label=subject),force=230)+
+  xlab("rok produkcji")+
+  ylab("")+
+  scale_fill_discrete(name = "zawód/zajęcie")
+```
+
+Pierwsze 3 filmy zarobiły znacznie mnije niż kolejne. Poza tym widać tendenje do dużych przychodów, gdy główny bohater jest przestępcą.
+
+## Najbardziej kasowe filmy
+
+```{r}
+
+knitr::kable(
+titles [,c(1,2,3,5,7,8,10)] %>% 
+  mutate(boxoffice_w_mln=titles$box_office/1E6) %>% 
+  arrange(desc(boxoffice_w_mln/1E6)) %>% 
+  head(3),
+col.names = c("tytuł","kraj","rok produkcji","reżyser","główny bohater","zawód/zajęcie","aktor","przychod w mln")
+)
+```
+
+Trzy filmy z największym przychodem powstały w Stanach Zjendoczonych. Rekordzistą jest film pt. "American Sniper" w reżyserii Clint'a Eastwood'a o Chris'ie Kyle'u, żołnierzu granym przez Bradley'a Cooper'a. Boxoffice osiągnał 350mln.
+
+# Wnioski
+
+1. Z czasem powstawało coraz więcej filmów biograficznych i trend ten się utrzymuje.
+2. Zdecydowanym liderem w tego typu produkcjach są Stany Zjednoczone.
+3. Najczęśniej fabuła skupia się na życiorysie jednej osoby.
+4. Najchętniej podejmowane tematy to sport, przestępczość, historia i muzyka.
+5. Biała rasa szczyci się największa liczba filmów o swoich przedstawcielach
+6. Zaledwie ~21% głównych postaci to kobiety.
+7. Reżyser z największym wkładem w branże filmów biograficznych to Michael Curtiz z osmioma produkcjami na koncie.
+8. Leondardo DiCaprio natomiast jest liderem pod względem występów w głównych rolach.
+9. Absolutnym rekordzistą jeśli chodzi o przychody jest film American Sniper w reżyserii Clint'a Eastwood'a
+
+# Co dalej?
+
+dalsze analizy mogłyby obejmować:
+
+* przeciętne przychody osiągane przez poszczególnych aktorów i reżyserów z minimum 3 filmami na koncie
+* filmy których tytuły zawierają nazwisko głównego bohatera
+* aktorzy dzielący imię z odgrywaną przez siebie postacią
+* model statysyczny określający jakie szanse ma osoba o danej płci, kolorze skóry oraz profesji, że powstanie o niej film
+
+## Źródła danych i wykorzystane pomoce:
+
+* https://www.statology.org/
+* https://stackoverflow.com/
+* https://sparkbyexamples.com/
+* http://geoprofesja.pl/
+* https://ggplot2.tidyverse.org/index.html
+* https://www.rstudio.com/wp-content/uploads/2015/02/rmarkdown-cheatsheet.pdf
+
+
+
+
